@@ -1,0 +1,862 @@
+// ***************************************//
+
+//Written By: Chintan Pathak
+
+//Summary - This is a C# programe which displays Gene Expression Data from RNASeq analysis. Values are pre-computed using R. Gene Expression Data is stored in MS SQL server consisting of three tables(Bladder Cancer, Lung Cancer & Other). It consist of gene expression value for RNASeq analysis such as P-value, log2fold, gene name, sample name, disease type. etc..
+
+//Search Options - Gene List, Database selection, Project List(Project/Sample/Experiment ID), Project Tags, Expression Level(Upregulated or Downregulated) & Expression Value(range)
+
+//Output - This program displays gene expression data in datagridview(table) as per user selection. Also, it consist of basic count summary of records as per user selection, link to spotfire visualization. This code is best understood and should be run in visual studio environment.
+
+//Other features - Exporting data to excel and viewing meta data file associated with the expression project and updating database.
+
+//Note: The gene expression values range shown in the code is just for DEMO purpose and not reflecting exact experiment range.
+
+//************************************************//
+
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Data;
+using System.Drawing;
+using System.Linq;
+using System.Text;
+using System.Windows.Forms;
+using System.Data.SqlClient;
+using System.IO;
+using System.Data.OleDb;
+using System.Data.Common;
+//Reason for using Telerik because it gives better filtering option in gridview(table)
+using Telerik.WinControls.UI;
+using Telerik.WinControls.Data;
+using System.Diagnostics;
+using Telerik.WinControls;
+using Telerik.WinControls.Export;
+
+namespace GeneExpression
+{
+    public partial class RadForm1 : Telerik.WinControls.UI.RadForm
+    {
+        // Connect to Database        
+        //Defining global class variables
+	SqlConnection con = new SqlConnection("Data Source= data source name; Initial Catalog=Gene_Expression; Trusted_Connection=True");
+        SqlDataAdapter sda;
+        SqlCommand cmd;
+        SqlCommandBuilder scb;
+        DataTable dt;
+        DataSet ds;
+        string sqlQuery;
+
+        public RadForm1()
+        {
+            InitializeComponent();
+        }       
+
+        private void RadForm1_Load(object sender, EventArgs e)
+        {
+            // Loads the Form
+	    // Adjust Window Size 
+            this.WindowState = ForExpressionWindowState.Maximized;
+            this.Location = new Point(0, 0);
+            this.Size = Screen.PrimaryScreen.WorkingArea.Size;                    
+        }       
+		  
+        private void buttonSubmit_Click_1(object sender, EventArgs e)
+        {
+            //horizontal scroll bar where gene expression value proportion can be selected from all records. For eg - It's value are - 25%, 50%, 75%, 100%
+            String trackbarValue = trackBar1.Value.ToString();   
+            try{
+                
+                if
+                    (checkBoxALL.Checked.Equals(false) && checkBoxAllProjects.Checked.Equals(false) && 
+                     string.IsNullOrWhiteSpace(textBoxGeneNames.Text) && listBoxProjects.SelectedIndex <= -1)
+                {
+                    MessageBox.Show("Required Inputs are not selected!");
+                    checkBoxALL.Text = "All Genes (*)";
+                    checkBoxALL.ForeColor = Color.Red;
+                    checkBoxAllProjects.Text = "All Projects (*)";
+                    checkBoxAllProjects.ForeColor = Color.Red;                                        
+                }
+
+                //Check if a project/db is selected
+                else if (checkBoxBladderCancer.Checked.Equals(false) && checkBoxLungCancer.Checked.Equals(false) && checkBoxOthers.Checked.Equals(false))
+                {
+                    MessageBox.Show("Please select Data first!");
+                }
+
+                else
+                {
+                    string table = "";
+                    if (checkBoxBladderCancer.Checked.Equals(true)) {
+                        table = "GeneExpression_LungCancer";
+                    }
+                    else if (checkBoxLungCancer.Checked.Equals(true)) {
+                        table = "GeneExpression_LungCancer";
+                    }
+                    else if (checkBoxOthers.Checked.Equals(true)) {
+                        table = "GeneExpression_Others";
+                     }
+
+                        String sql_query = "SELECT * FROM " + table +  " as dp Where Exists(Select * from " + table + " as dpp Where dpp.Accession = dp.Accession Having Count(Accession) >= (Select         
+                                            Count(Distinct Project) from " + table + ")/" + trackbarValue + ")";
+
+                        // # Gather all other Options selected by user and add it to above SQL Query
+
+                        string paramGenelist = string.Empty;
+                        if (textBoxGeneNames.Enabled && !string.IsNullOrWhiteSpace(textBoxGeneNames.Text)) //If checkbox all Genes is not selected
+                        {
+                            String accessionEntered = textBoxGeneNames.Text.ToString();
+                            accessionEntered = accessionEntered.Replace(" ", "','");
+                            accessionEntered = "'" + accessionEntered + "'";
+                            paramGenelist = " and Accession In " + "(" + accessionEntered + ")";
+                        }
+
+                        string paramProjectlist = string.Empty;
+                        if (listBoxProjects.Enabled && !string.IsNullOrWhiteSpace(listBoxProjects.Text) && listBoxProjects.SelectedIndex > -1) // if checkbox all project is not selected
+                        {
+                            var selectedValues = listBoxProjects.SelectedItems.Cast<object>()
+                                     .Select(dr => Convert.ToString(dr)).ToList();
+                            string selectedProjects = string.Join("','", selectedValues.ToList());
+                            selectedProjects = "'" + selectedProjects + "'";
+                            paramprojectlist = " and Project In " + "(" + selectedProjects + ")";
+                        }
+                        
+                        string paramExpressionRange = string.Empty;
+                        if (comboBoxExpressionValue.SelectedIndex > -1 && !string.IsNullOrWhiteSpace(comboBoxExpressionValue.Text))
+                        {                            
+                            paramExpression = " and Expression " + comboBoxExpressionValue.Text;
+                        }
+
+                        string paramProjectTag = string.Empty;
+                        if (listBoxProjectTags.SelectedIndex > -1) 
+                        {
+                            var selectedValues = listBoxProjectTags.SelectedItems.Cast<object>()
+                                                                 .Select(dr => Convert.ToString(dr)).ToList();
+                            string selectedTags = string.Join("','", selectedValues.ToList());
+                            selectedTags = "'" + selectedTags + "'";
+
+                            paramProjectTag = " and [Expression Project] IN (" + selectedTags + ")";   
+                        }
+
+                        string paramExpressionLevel = string.Empty;
+                        if (listBoxExpressionLevel .SelectedIndex > -1)
+                        {
+                            var selectedValues = listBoxExpressionLevel.SelectedItems.Cast<object>()
+                                     .Select(dr => Convert.ToString(dr)).ToList();
+                            string selectedLevels = string.Join("','", selectedValues.ToList());
+                            selectedLevels = "'" + selectedLevels + "'";
+
+                            paramExpressionLevel = " and [Expression Level] IN (" + selectedLevels + ")";
+                        }
+                            //appending user selected option to sql query
+                            sql_query = sql_query + paramGenelist + paramProjectlist + paramExpressionRange + paramProjectTag + paramExpressionLevel;
+                            RunSQLQuery(sql_query);
+                 
+                }// end of else
+          }// end of try
+ 
+          catch(Exception ex){
+          MessageBox.Show(ex.ToString());
+          }  
+            
+        }//end of method
+
+        
+	//Upload data to existing database        private void buttonBrowseUpload_Click(object sender, EventArgs e)
+        { 			
+	  //Select which database to upload data
+            string db = "";
+            if (checkBoxBladderCancer.Checked == true)
+            {
+                db = "GeneExpression_LungCancer";                
+            }
+
+            else if (checkBoxLungCancer.Checked == true)
+            { 
+                db = "GeneExpression_BladderCancer";
+            }
+
+            else if (checkBoxOthers.Checked == true)
+            {
+                db = "GeneExpression_Others";
+            }
+
+            if (checkBoxBladderCancer.Checked == false && checkBoxLungCancer.Checked == false && checkBoxOthers.Checked == false)
+            {
+		//If no destination database is selected
+                MessageBox.Show("Please check any one database");
+
+            }
+            else
+            {
+
+                //Uploads new project data to db
+                OpenFileDialog openFileDialog = new OpenFileDialog();
+                if (openFileDialog.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+                {
+                    
+                    string path = openFileDialog.FileName;
+                  try{
+					if (File.Exists(path))
+                    {
+                        //MessageBox.Show("File Exist");
+                    }
+                    else
+                    {
+                        MessageBox.Show("File doesn't exist");
+                    }
+                  }
+				  catch (Exception ex)
+                    {
+                      MessageBox.Show("Upload data Error: " + ex.Message + ex.StackTrace);
+                    }
+                    string excelConnectionString = string.Format("Provider=Microsoft.ACE.OLEDB.12.0;Data Source={0};Extended Properties=Excel 8.0", path);
+
+                    // Create Connection to Excel Workbook 
+                  try{
+					using (OleDbConnection connection = new OleDbConnection())
+                    {// opens connection to excel sheet
+                        connection.ConnectionString = excelConnectionString;
+                        connection.Open();
+                        OleDbCommand command = new OleDbCommand("Select * FROM [db_name]", connection);
+                        //con.Open(); 
+                        // Create DbDataReader to Data Worksheet 
+                        using (DbDataReader dr = command.ExecuteReader())
+                        {
+                            con.Open(); // opens SQL server connections
+
+                            // Bulk Copy to SQL Server 
+                            using (SqlBulkCopy bulkCopy = new SqlBulkCopy(con))
+                            {
+                                bulkCopy.DestinationTableName = db;
+                                bulkCopy.WriteToServer(dr);
+                            }
+                        }
+                    }
+				  }
+					catch (Exception ex)
+                       {
+                        MessageBox.Show(ex.Message + ex.StackTrace);
+                       }
+                }
+            }//end of else
+        }         
+          
+
+        private void buttonRefresh_Click(object sender, EventArgs e)
+        {
+			// Refresh button is used refresh/reset the page
+            string table = "";
+            if (checkBoxBladderCancer.Checked.Equals(true))
+            {
+                table = "GeneExpression_BladderCancer";
+            }
+            else if (checkBoxLungCancer.Checked.Equals(true))
+            {
+                table = "GeneExpression_LungCancer";
+            }
+            else if (checkBoxOthers.Checked.Equals(true))
+            {
+                table = "GeneExpression_Others";
+            }
+            else {
+
+                MessageBox.Show("You need to first load data inorder to use Refresh");
+                return;
+            }
+
+            sda = new SqlDataAdapter("Select * from " + table, con);
+            ds = new System.Data.DataSet();
+            sda.Fill(ds, "Genes");
+            radGridView1.DataSource = ds.Tables[0];
+            con.Close();
+            tooltipConfigure();
+
+            checkBoxALL.Text = "All Genes";
+            checkBoxALL.ForeColor = Color.Black;
+            checkBoxAllProjects.Text = "All Projects";
+            checkBoxAllProjects.ForeColor = Color.Black;
+
+            // Clear user selection in search panel
+            if (textBoxGeneNames.Enabled || !string.IsNullOrWhiteSpace(textBoxGeneNames.Text)) {
+                textBoxGeneNames.Clear();
+            }
+            if (listBoxProjects.Enabled || listBoxProjects.SelectedIndex > -1)
+            {
+                listBoxProjects.ClearSelected();
+            }
+            if (listBoxProjectTags.SelectedIndex > -1)
+            {
+                listBoxProjectTags.ClearSelected();
+            }
+            if (listBoxExpressionLevel.SelectedIndex > -1)
+            {
+                listBoxExpressionLevel.ClearSelected();
+            }
+            if (comboBoxExpressionValue.SelectedIndex > -1)
+            {
+                comboBoxExpressionValue.SelectedIndex = -1;
+            }
+            trackBar1.Value = trackBar1.Minimum;
+        }
+
+		
+	private void buttonViewMetaData_Click(object sender, EventArgs e)
+        {
+            //Opens Associated Gene Expression Metadata file for that project list in the dropdown box.
+
+            try
+            {
+                if ((Convert.ToInt32(comboBoxProjects.SelectedIndex) != -1) || comboBoxProjects.SelectedItem.ToString() != "")
+                {
+                    String name = comboBoxProjects.SelectedItem.ToString();
+                    //String[] name = partialName.Split('_');
+
+                    DirectoryInfo hdDirectoryInWhichToSearch = new DirectoryInfo("//server/path/to/Metadata/");
+                    FileInfo[] filesInDir = hdDirectoryInWhichToSearch.GetFiles("*" + name + "*" + "*.*");                       //
+                    //Create File Path        
+                    String filePath;
+                    filePath = "//server/path/to/Metadata/" + filesInDir[0];
+
+                    if (System.IO.File.Exists(filePath))
+                    {
+                        //Process.Start(filePath);
+                        OpenExcel(filePath);
+                    }
+                    else
+                    {
+                        MessageBox.Show(" Please check if Gene Expression MetaFile exist in the folder");
+                    }
+                }
+                else
+                {
+                    MessageBox.Show("No Project Selected");
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex + " OR Please make sure you selected Project from list or check file path & file name!");
+                //MessageBox.Show(ex.Message);
+            }
+        }
+		
+		
+        private void checkBoxBladderCancer_CheckedChanged(object sender, EventArgs e)
+        {
+	    //Based on checkbox state, combobox is populated
+            if (checkBoxBladderCancer.Checked == true)
+            {
+                checkBoxLungCancer.Checked = false;
+                checkBoxOthers.Checked = false;
+                sqlQuery = "Select * from [GeneExpression_BladderCancer]";
+                RunSQLQuery(sqlQuery);
+                PopulateProjectComboboxAndListBox("GeneExpression_BladderCancer");
+                PopulateProjectTagsListBox("GeneExpression_BladderCancer");
+                populateExpressionLevelListBox("GeneExpression_BladderCancer");
+
+            }
+        }
+
+        private void checkBoxLungCancer_CheckedChanged(object sender, EventArgs e)
+        {
+	    //Based on checkbox state, combobox is populated
+            if (checkBoxLungCancer.Checked == true)
+            {
+                checkBoxBladderCancer.Checked = false;
+                checkBoxOthers.Checked = false;                
+                sqlQuery = "Select * from [GeneExpression_LungCancer]";
+                RunSQLQuery(sqlQuery);
+                PopulateProjectComboboxAndListBox("GeneExpression_LungCancer");
+                PopulateProjectTagsListBox("GeneExpression_LungCancer");
+                populateExpressionLevelListBox("GeneExpression_LungCancer");
+            }
+        }
+
+        private void checkBoxOthers_CheckedChanged(object sender, EventArgs e)
+        {
+	    //Based on checkbox state, combobox is populated
+            if (checkBoxOthers.Checked == true)
+            {
+                checkBoxLungCancer.Checked = false;
+                checkBoxBladderCancer.Checked = false;
+                sqlQuery = "Select * from [GeneExpression_Others]";
+                RunSQLQuery(sqlQuery);
+                PopulateProjectComboboxAndListBox("GeneExpression_Others");
+                PopulateProjectTagsListBox("GeneExpression_Others");
+                populateExpressionLevelListBox("GeneExpression_Others");
+            }
+        }   
+
+        private void checkBoxALL_CheckedChanged(object sender, EventArgs e)
+        {
+	    //Enable/Disable checkbox based on checkBoxALL selection
+			
+            if (((CheckBox)sender).Checked)
+            {
+                labelGeneNames.Enabled = false;
+                textBoxGeneNames.Enabled = false;
+            }
+            else
+            {
+                labelGeneNames.Enabled = true;
+                textBoxGeneNames.Enabled = true;
+            }
+        }
+
+        private void checkBoxAllProjects_CheckedChanged(object sender, EventArgs e)
+        {
+			//Enable/Disable checkbox based on checkBoxAllProjects selection
+			//Basicallly you are selecting all data(no particular project/sample/experiment selection)
+            if (((CheckBox)sender).Checked)
+            {
+                labelSelectProjects.Enabled = false;
+                listBoxProjects.Enabled = false;
+            }
+            else
+            {
+                labelSelectProjects.Enabled = true;
+                listBoxProjects.Enabled = true;
+            }
+        }	      
+           
+	private void pictureExportToExcel_Click(object sender, EventArgs e)
+        {
+	   //Click on Icon on Window to launch browser for find files to upload data
+           ExportToExcel();
+        }
+		
+	private void pictureBoxSpotfire_Click(object sender, EventArgs e)
+        {
+	   //Link to visualization posted on Spotfire which consist of pre-created graph from expression data. 
+           //Here spitfire is connected to internal gene expression database
+           Process.Start("Spotfire server link);
+        }        
+
+        private void pictureBoxSpotfire_MouseHover(object sender, EventArgs e)
+        {
+	   //Creating tooltip when mouse hover Spotfire icon
+           ToolTip tooltipSpotfire = new ToolTip();
+           tooltipSpotfire.SetToolTip(pictureBoxSpotfire, "Spotfire");
+           tooltipSpotfire.IsBalloon = true;
+        }	
+      			
+        private void radGridView1_CellClick(object sender, GridViewCellEventArgs e)
+        {
+	   //Adding gene id link for NCBI Gene db for Gene column values
+			          
+	   if (e.ColumnIndex == -1) 
+            {
+                return;
+            }
+
+           else if (e.ColumnIndex >= 0 && radGridView1.Columns[e.ColumnIndex].Name.Equals("Accession"))
+            {
+                try
+                {
+                    if (e.RowIndex == -1)  // ignore header row 
+                        return;    
+
+                    else if (e.RowIndex >= 0)
+                    {
+						
+                        Process.Start("https://www.ncbi.nlm.nih.gov/gene/?term=" + radGridView1.Rows[e.RowIndex].Cells[e.ColumnIndex].Value as string);
+                    }
+                }
+
+                catch (Exception ex)
+                {
+
+                    MessageBox.Show("Cell Click Error: " + ex.Message + ex.StackTrace);
+                }
+            }
+
+            else
+            {
+                //Do Nothing
+            }         
+         } 
+	 
+	 private void trackBar1_Scroll(object sender, EventArgs e)
+         {
+	    //Create a horizontal scroll bar where gene expression value proportion can be selected. For eg - It's value are - 25%, 50%, 75%, 100% 
+            String value = trackBar1.Value.ToString();
+            //MessageBox.Show("Percentage", value);
+         }
+		 		 
+	private Form launchLoadingDialog() 
+        {
+
+	    //Loading dialog while form controls are loading at an event. 
+	    //For eg - when loading a table after submitting new request to display selected data
+            RadForm rf = new RadForm();
+            rf.Text = "Loading......";
+            rf.Font.Bold.Equals(true);
+            rf.ControlBox = false;
+            rf.ShowIcon = false;
+            rf.Opacity.Equals("0%");
+            rf.TransparencyKey = Color.White;
+            rf.Width = 20;
+            rf.Height = 22;
+            rf.StartPosition = FormStartPosition.CenterScreen;
+            rf.UseWaitCursor = true;
+            rf.Show();
+            return rf;        
+        }
+
+		
+	private void coloringCellsBasedOnExpressionValue(string Expression_value1, string Expression_value2 = null) 
+        {
+
+           //Change color of table cells of column gene_column based on range.
+	  // Expression value is calculated from differential gene experiment
+
+           ConditionalFormattingObject obj = new ConditionalFormattingObject();
+            
+	  try
+             {
+	        if (gene_value2 != null)
+                 {
+                   obj = new ConditionalFormattingObject("MyCondition", ConditionTypes.Between, Expression_value1, Expression_value2, false);
+                   if (Expression_value1 == "0.5")
+                   {
+                      obj.CellBackColor = Color.Yellow;
+                      obj.CellForeColor = Color.Black;
+                      obj.TextAlignment = ContentAlignment.MiddleRight;
+                      this.radGridView1.Columns["Gene Expression"].ConditionalFormattingObjectList.Add(obj);
+                   }
+                   else if (Expression_value1 == "0.1")
+                   {
+                      obj.CellBackColor = Color.Green;
+                      obj.CellForeColor = Color.Black;
+                      obj.TextAlignment = ContentAlignment.MiddleRight;
+                      this.radGridView1.Columns["Gene Expression"].ConditionalFormattingObjectList.Add(obj);                
+                   }
+                   else
+                   {
+                      obj = new ConditionalFormattingObject("MyCondition", ConditionTypes.Less, Expression_value1, "", false);
+                      obj.CellBackColor = Color.Gray;
+                      obj.CellForeColor = Color.Black;
+                      obj.TextAlignment = ContentAlignment.MiddleRight;
+                      this.radGridView1.Columns["Gene Expression"].ConditionalFormattingObjectList.Add(obj);
+                   }
+                 }
+                else
+                {
+                  if (Expression_value1 == "1.0")
+                  {
+                      obj = new ConditionalFormattingObject("MyCondition", ConditionTypes.GreaterOrEqual, Expression_value1, "", false);
+                      obj.CellBackColor = Color.OrangeRed;
+                      obj.CellForeColor = Color.Black;
+                      obj.TextAlignment = ContentAlignment.MiddleRight;
+                      this.radGridView1.Columns["Gene Expression"].ConditionalFormattingObjectList.Add(obj);
+                  } 
+                  else if (Expression_value1 == "0.1") {
+                      obj = new ConditionalFormattingObject("MyCondition", ConditionTypes.Less, Expression_value1, "", false);
+                      obj.CellBackColor = Color.Gray;
+                      obj.CellForeColor = Color.Black;
+                      obj.TextAlignment = ContentAlignment.MiddleRight;
+                      this.radGridView1.Columns["Gene Expression"].ConditionalFormattingObjectList.Add(obj);
+                
+                  }
+
+                }
+	     }
+	     catch (Exception ex)
+                {
+                    MessageBox.Show("Cell Coloration Error: " + ex.Message + ex.StackTrace);
+                }
+                    
+        }  
+
+
+	private void countGene(ref int gene_red, ref int gene_green, ref int gene_yellow, ref int gene_white)
+        {  
+            // Count Gene based on expression value range
+            foreach (GridViewRowInfo row in radGridView1.Rows)
+            {
+                if (Convert.ToDecimal(row.Cells["Expression_value"].Value) >= 0.5M && Convert.ToDecimal(row.Cells["Expression_value"].Value) <= 1)
+                {
+                   gene_yellow++;
+                 }
+                
+                else if (Convert.ToDecimal(row.Cells["Expression_value"].Value) >= 0.1M && Convert.ToDecimal(row.Cells["Expression_value"].Value) < 0.5M)
+                {
+                    gene_green++;
+                }
+
+                else if (Convert.ToDecimal(row.Cells["Expression_value"].Value) < 0.1M)
+                {
+                    gene_white++;
+                }
+
+                else if (Convert.ToDecimal(row.Cells["Expression_value"].Value) > 1.0M)
+                {
+                    gene_red++;
+                }
+            }            
+        }
+
+        private string displayRecordCount()
+        { 
+            //Count total record in table
+            var RecordCount = radGridView1.Rows.Cast<Telerik.WinControls.UI.GridViewRowInfo>().Select(r => r.Cells["Accession"].Value).Count();
+            string rc = "Total Records: " + RecordCount;
+            return rc;
+        }
+
+        private string displayDistinctProjectsCount()
+        {
+	    //Count total experiment/sample count
+            var distinctProjectsCount = radGridView1.Rows.Cast<Telerik.WinControls.UI.GridViewRowInfo>().Select(r => r.Cells["Project"].Value).Distinct().Count();
+            string prjcount = "Unique Projects: " + distinctProjectsCount;
+            return prjcount;
+        }
+
+        private string displayDistinctGeneCount()
+        {
+            //Accession = Gene
+            var distinctGenesCount = radGridView1.Rows.Cast<Telerik.WinControls.UI.GridViewRowInfo>().Select(r => r.Cells["Accession"].Value).Distinct().Count();
+            string genecount = "Unique Accessions/Gene: " + distinctGenesCount;
+            return genecount;
+        }	
+				
+	private void ExportToExcel()
+        {		
+			
+            // Creating a Excel object. 
+            Microsoft.Office.Interop.Excel._Application excel = new Microsoft.Office.Interop.Excel.Application();
+            Microsoft.Office.Interop.Excel._Workbook workbook = excel.Workbooks.Add(Type.Missing);
+            Microsoft.Office.Interop.Excel._Worksheet worksheet = null;
+
+            try
+            {
+
+                worksheet = workbook.ActiveSheet;
+                worksheet.Name = "ExportedFromDatGrid";
+
+                int cellRowIndex = 1;
+                int cellColumnIndex = 1;
+
+                //Loop through each row and read value from each column. 
+                for (int i = 0; i < radGridView1.Rows.Count - 1; i++)
+                {
+                    for (int j = 0; j < radGridView1.Columns.Count; j++)
+                    {
+                        // Excel index starts from 1,1. As first Row would have the Column headers, adding a condition check. 
+                        if (cellRowIndex == 1)
+                        {
+                            worksheet.Cells[cellRowIndex, cellColumnIndex] = radGridView1.Columns[j].HeaderText;
+                        }
+                        else
+                        {                           
+
+                            worksheet.Cells[cellRowIndex, cellColumnIndex] = radGridView1.Rows[i].Cells[j].Value.ToString();
+                            
+
+
+                        }
+                        cellColumnIndex++;
+                    }
+                    cellColumnIndex = 1;
+                    cellRowIndex++;
+                }
+
+                //Getting the location and file name of the excel to save from user. 
+                SaveFileDialog saveDialog = new SaveFileDialog();
+                saveDialog.Filter = "Excel files (*.xlsx)|*.xlsx|All files (*.*)|*.*";
+                saveDialog.FilterIndex = 2;
+
+                if (saveDialog.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+                {
+                    workbook.SaveAs(saveDialog.FileName);
+                    MessageBox.Show("Export Successful");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                MessageBox.Show(ex.Message);
+            }
+            finally
+            {
+                excel.Quit();
+                workbook = null;
+                excel = null;
+            }
+
+        }         
+		 
+	public void OpenExcel(string fileLocation)
+        {
+            //using Microsoft.Office.Interop.Excel to open excel file
+            var exApp = new Microsoft.Office.Interop.Excel.Application();
+            exApp.Visible = true;
+            var exWbk = exApp.Workbooks.Open(fileLocation, 0, false, 5, "", "", false, Microsoft.Office.Interop.Excel.XlPlatform.xlWindows, "", true, false, 0, true, false, false);
+            var exWks = (Microsoft.Office.Interop.Excel.Worksheet)exWbk.Sheets["SheetName"];
+            exWks.Activate();
+        }
+		 
+		 
+	//Combobox 1	 
+	private void PopulateProjectComboboxAndListBox(string db)
+        {			
+            //Fill combobox with unqiue project/sample/experiment name/id
+            
+	    try{
+		con.Open();			
+		//SQL query to fetch data
+                string Sql = "Select DISTINCT Project from " + db;
+                        
+                SqlCommand cmd = new SqlCommand(Sql, con);
+                SqlDataReader DR = cmd.ExecuteReader();
+			
+                comboBoxProjects.Items.Clear();
+                listBoxProjects.Items.Clear();
+
+                while (DR.Read())
+                {
+                  comboBoxProjects.Items.Add(DR[0]);
+                  listBoxProjects.Items.Add(DR[0]);
+                 }
+                con.Close();
+		 }
+		catch (Exception ex)
+                {
+                  MessageBox.Show("ComboboxAndListBox Populate Error: " + ex.Message + ex.StackTrace);
+                } 		  
+	 }
+
+        //Combobox 2
+        private void PopulateProjectTagsListBox(string db) 
+        {
+            
+	  //Fill combobox with unqiue project tags
+	  // Project tags are basically similar Project/Sample/Experiment name/id with some number. eg - TrptophaneTreated_01, TryptophaneTreated_02
+	  //Project - Sample/Experiment
+          try
+             {  
+	      con.Open();
+              string Sql = "Select DISTINCT [Project] from " + db;
+              SqlCommand cmd = new SqlCommand(Sql, con);
+              SqlDataReader DR = cmd.ExecuteReader();
+
+              listBoxProjectTags.Items.Clear();
+
+              while (DR.Read())
+              {
+                listBoxProjectTags.Items.Add(DR[0]);
+              }
+              con.Close();      
+	      }
+	  catch (Exception ex)
+            {
+              MessageBox.Show("Project Tag List Populate Error: " + ex.Message + ex.StackTrace);
+            }
+        }
+
+        //Combobox 3
+        private void populateExpressionLevelListBox(string db)
+        {	
+         //Fill combobox with unique project tags
+	 //Expression level - Upregulated or downregulated
+           try
+	     {
+   	       con.Open();
+               string Sql = "Select DISTINCT [Expression Level] from " + db;
+               SqlCommand cmd = new SqlCommand(Sql, con);
+               SqlDataReader DR = cmd.ExecuteReader();
+ 
+               listBoxExpressionLevel.Items.Clear();
+
+               while (DR.Read())
+               {
+                listBoxExpressionLevel.Items.Add(DR[0]);
+               }
+               con.Close();  
+		  }
+	       catch (Exception ex)
+               {
+                 MessageBox.Show("Project Tag List Populate Error: " + ex.Message + ex.StackTrace);
+               }	
+        }       
+
+		
+	private void resetSearchPanel() 
+        {
+         //Reset checkbox properties incase it changed
+            checkBoxALL.Text = "All Genes";
+            checkBoxALL.ForeColor = Color.Black;
+            checkBoxAllProjects.Text = "All Projects";
+            checkBoxAllProjects.ForeColor = Color.Black;      
+        }
+        
+        private void RunSQLQuery(string query) 
+        {
+            try
+            {                
+                //Launch loading dialog
+                Form loading_dialog = new Form();
+                loading_dialog = launchLoadingDialog();
+                con.Open();
+                //run query and fill table
+                sda = new SqlDataAdapter(query, con);
+                ds = new System.Data.DataSet();
+                sda.Fill(ds, "Genes");
+                // Assign gridview dataset values to display
+                radGridView1.DataSource = ds.Tables[0];
+                // Change color of Accession column for hyperlink
+                foreach (GridViewDataRowInfo row in radGridView1.Rows)
+                {
+                    row.Cells["Accession"].Style.ForeColor = Color.Blue;
+                }               
+                
+                // Color 'Gene Expression' column based on expression values range
+                coloringCellsBasedOnExpressionValue("1.0"); // greater than 1
+                coloringCellsBasedOnExpressionValue("0.5", "1.0"); // Between 0.5 & 1.0
+                coloringCellsBasedOnExpressionValue("0.1", "0.5"); //Between 0.1 & 0.5 
+                
+                loading_dialog.Close();               
+
+               // Configure stat and excel tooltip as per the records obtain in table
+                tooltipConfigure();
+
+                //Reset some controls of search panel on left. example - user selection 
+                resetSearchPanel();               
+
+                con.Close();
+                                
+            }
+            catch (Exception ex) {
+                MessageBox.Show(ex.Message.ToString());
+            }
+        }         
+
+        private void tooltipConfigure() {
+            // configure tooltip to label 'stat' and 'excel'
+            int gene_red = 0;
+            int gene_green = 0;
+            int gene_yellow = 0;
+            int gene_white = 0;
+            countGene(ref gene_red, ref gene_green, ref gene_yellow, ref gene_white);
+
+            string geneRed = "Gene(>1% RED): " + gene_red;
+            string geneGreen = "Gene(>0.1-0.5 % Green): " + gene_green;
+            string geneYellow = "Gene(>0.5-1.0 % Yellow): " + gene_yellow;
+            string geneWhite = "Gene(<0.1% White): " + gene_white;
+
+            // # STATS
+            string recordCount = displayRecordCount();
+            string geneCount = displayDistinctGeneCount();
+            string projectCount = displayDistinctProjectsCount();
+            
+            //Displaying basic count on tooltip			
+            toolTipStats.SetToolTip(labelStat, recordCount + "\n" + geneCount + "\n" + projectCount + "\n" + geneRed +
+                                    "\n" + geneGreen + "\n" + geneYellow + "\n" + geneWhite);
+            //toolTipExportToExcel.ToolTipTitle = "Export To Excel";
+            toolTipExportToExcel.ToolTipIcon.Equals("None");
+            toolTipExportToExcel.SetToolTip(pictureBoxExportToExcel, "Export To Excel");
+        }		
+		
+       
+        }
+    }
+
