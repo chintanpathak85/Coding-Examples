@@ -1,9 +1,10 @@
 # Coding-Examples
 
 This repository consist of code written in Python 2.7, R and C# 4.5 .Net framework
+
 Python code - Machine_Learning_Python.py, Html_Scrapper_Python.py and Plots_Python.py
 R code - Create_MasterTable.R
-C# - Display_GeneExpresionData.C#
+C# - Selecting_GeneExpresionData.C#
 
 Note:
 Machine_Learning_Python.py uses file HR_Data.csv
